@@ -258,7 +258,9 @@ async def process_final_confirmation(query: CallbackQuery, state: FSMContext):
 # --- 6. UI & LOGIC FUNCTIONS (ADMIN) ---
 async def get_admin_panel(message_or_query):
     builder = InlineKeyboardBuilder()
+    # ✅ CORRECTED - Added .pack()
     builder.button(text="Управление товарами", callback_data=AdminCallback(action="manage_items").pack())
+    # ✅ CORRECTED - Added .pack()
     builder.button(text="⚙️ Настройки", callback_data=AdminCallback(action="settings").pack())
     builder.adjust(1)
     text = "Добро пожаловать в панель администратора."
@@ -273,8 +275,11 @@ async def show_item_management_categories(query: CallbackQuery):
     for cat_id, name in categories:
         builder.button(text=name, callback_data=AdminCallback(action="view_cat_items", category_id=cat_id).pack())
     builder.adjust(2)
+    # ✅ CORRECTED - Added .pack()
     builder.row(InlineKeyboardButton(text="➕ Добавить категорию", callback_data=AdminCallback(action="add_category").pack()))
+    # ✅ CORRECTED - Added .pack()
     builder.row(InlineKeyboardButton(text="➖ Удалить категорию", callback_data=AdminCallback(action="delete_category_menu").pack()))
+    # ✅ CORRECTED - Added .pack()
     builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=AdminCallback(action="back_to_main").pack()))
     await query.message.edit_text("Выберите категорию для управления товарами или воспользуйтесь опциями ниже:",
                                   reply_markup=builder.as_markup())
