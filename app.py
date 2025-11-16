@@ -10,7 +10,7 @@ from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import (Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton, 
+from aiogram.types import (Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton,
                            ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton)
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.filters.callback_data import CallbackData
@@ -126,7 +126,7 @@ async def show_categories(message: Message, message_id: Optional[int] = None):
     categories = await db_query("SELECT id, name FROM categories ORDER BY id")
     builder = InlineKeyboardBuilder()
     for cat_id, name in categories:
-        builder.button(text=name, callback_data=CategoryCallback(id=cat_id))
+        builder.button(text=name, callback_data=CategoryCallback(id=cat_id).pack())
     builder.adjust(2)
     builder.row(InlineKeyboardButton(text="🛒 Корзина", callback_data='view_cart'))
     text = "👇 Выберите категорию:"
@@ -144,7 +144,7 @@ async def show_items_in_category(query: CallbackQuery, category_id: int):
     items = await db_query("SELECT id, name, price FROM menu_items WHERE category_id = ? ORDER BY name", (category_id,))
     builder = InlineKeyboardBuilder()
     for item_id, name, price in items:
-        builder.button(text=f"{name} - {int(price)} руб.", callback_data=ItemCallback(id=item_id))
+        builder.button(text=f"{name} - {int(price)} руб.", callback_data=ItemCallback(id=item_id).pack())
     builder.adjust(1)
     builder.row(InlineKeyboardButton(text="⬅️ Назад к категориям", callback_data='back_to_categories'))
     await query.message.edit_text("Выберите товар:", reply_markup=builder.as_markup())
@@ -161,7 +161,7 @@ async def show_cart(chat_id: int, message_id: Optional[int] = None, message: Opt
         total_price = sum(price * quantity for _, _, price, quantity in cart_items)
         for item_id, name, price, quantity in cart_items:
             text += f"▪️ {name} ({int(price)}р) x {quantity} = {int(price * quantity)}р\n"
-            builder.button(text=f"❌ Удалить {name}", callback_data=RemoveFromCartCallback(item_id=item_id))
+            builder.button(text=f"❌ Удалить {name}", callback_data=RemoveFromCartCallback(item_id=item_id).pack())
         builder.adjust(1)
         text += f"\n*Итого: {int(total_price)} руб.*"
         builder.row(InlineKeyboardButton(text="✅ Оформить заказ", callback_data='checkout'))
@@ -258,8 +258,8 @@ async def process_final_confirmation(query: CallbackQuery, state: FSMContext):
 # --- 6. UI & LOGIC FUNCTIONS (ADMIN) ---
 async def get_admin_panel(message_or_query):
     builder = InlineKeyboardBuilder()
-    builder.button(text="Управление товарами", callback_data=AdminCallback(action="manage_items"))
-    builder.button(text="⚙️ Настройки", callback_data=AdminCallback(action="settings"))
+    builder.button(text="Управление товарами", callback_data=AdminCallback(action="manage_items").pack())
+    builder.button(text="⚙️ Настройки", callback_data=AdminCallback(action="settings").pack())
     builder.adjust(1)
     text = "Добро пожаловать в панель администратора."
     if isinstance(message_or_query, Message):
@@ -271,11 +271,11 @@ async def show_item_management_categories(query: CallbackQuery):
     categories = await db_query("SELECT id, name FROM categories ORDER BY id")
     builder = InlineKeyboardBuilder()
     for cat_id, name in categories:
-        builder.button(text=name, callback_data=AdminCallback(action="view_cat_items", category_id=cat_id))
+        builder.button(text=name, callback_data=AdminCallback(action="view_cat_items", category_id=cat_id).pack())
     builder.adjust(2)
-    builder.row(InlineKeyboardButton(text="➕ Добавить категорию", callback_data=AdminCallback(action="add_category")))
-    builder.row(InlineKeyboardButton(text="➖ Удалить категорию", callback_data=AdminCallback(action="delete_category_menu")))
-    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=AdminCallback(action="back_to_main")))
+    builder.row(InlineKeyboardButton(text="➕ Добавить категорию", callback_data=AdminCallback(action="add_category").pack()))
+    builder.row(InlineKeyboardButton(text="➖ Удалить категорию", callback_data=AdminCallback(action="delete_category_menu").pack()))
+    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=AdminCallback(action="back_to_main").pack()))
     await query.message.edit_text("Выберите категорию для управления товарами или воспользуйтесь опциями ниже:",
                                   reply_markup=builder.as_markup())
 
@@ -283,23 +283,28 @@ async def show_items_for_admin(query: CallbackQuery, category_id: int):
     items = await db_query("SELECT id, name, price FROM menu_items WHERE category_id = ?", (category_id,))
     builder = InlineKeyboardBuilder()
     for item_id, name, price in items:
-        builder.button(text=f"{name} - {int(price)}р", callback_data=AdminCallback(action="edit_item", item_id=item_id))
+        builder.button(text=f"{name} - {int(price)}р", callback_data=AdminCallback(action="edit_item", item_id=item_id).pack())
     builder.adjust(1)
     builder.row(InlineKeyboardButton(text="➕ Добавить новый товар",
-                                      callback_data=AdminCallback(action="add_item", category_id=category_id)))
+                                      callback_data=AdminCallback(action="add_item", category_id=category_id).pack()))
     builder.row(InlineKeyboardButton(text="⬅️ Назад к категориям",
-                                      callback_data=AdminCallback(action="manage_items")))
+                                      callback_data=AdminCallback(action="manage_items").pack()))
     await query.message.edit_text("Нажмите на товар для редактирования или добавьте новый:",
                                   reply_markup=builder.as_markup())
 
 async def show_item_edit_menu(query: CallbackQuery, item_id: int):
-    item_name, cat_id = await db_query("SELECT name, category_id FROM menu_items WHERE id = ?", (item_id,), fetchone=True)
+    item_data = await db_query("SELECT name, category_id FROM menu_items WHERE id = ?", (item_id,), fetchone=True)
+    if not item_data:
+        await query.answer("Товар не найден. Возможно, он был удален.", show_alert=True)
+        await get_admin_panel(query)
+        return
+    item_name, cat_id = item_data
     builder = InlineKeyboardBuilder()
-    builder.button(text="✏️ Изменить цену", callback_data=AdminCallback(action="edit_price", item_id=item_id))
-    builder.button(text="🗑️ Удалить товар", callback_data=AdminCallback(action="confirm_delete_item", item_id=item_id, category_id=cat_id))
+    builder.button(text="✏️ Изменить цену", callback_data=AdminCallback(action="edit_price", item_id=item_id).pack())
+    builder.button(text="🗑️ Удалить товар", callback_data=AdminCallback(action="confirm_delete_item", item_id=item_id, category_id=cat_id).pack())
     builder.adjust(1)
     builder.row(InlineKeyboardButton(text="⬅️ Назад к товарам",
-                                      callback_data=AdminCallback(action="view_cat_items", category_id=cat_id)))
+                                      callback_data=AdminCallback(action="view_cat_items", category_id=cat_id).pack()))
     await query.message.edit_text(f"Редактирование товара: *{item_name}*", reply_markup=builder.as_markup())
 
 async def show_admin_settings(query: CallbackQuery):
@@ -310,11 +315,11 @@ async def show_admin_settings(query: CallbackQuery):
             f"🎉 *Бесплатная доставка от:* {int(settings.get('free_delivery_threshold', 0))} руб.")
     builder = InlineKeyboardBuilder()
     builder.button(text="✏️ Изменить стоимость доставки",
-                   callback_data=AdminCallback(action="edit_setting", setting_key="delivery_fee"))
+                   callback_data=AdminCallback(action="edit_setting", setting_key="delivery_fee").pack())
     builder.button(text="✏️ Изменить порог бесплатной доставки",
-                   callback_data=AdminCallback(action="edit_setting", setting_key="free_delivery_threshold"))
+                   callback_data=AdminCallback(action="edit_setting", setting_key="free_delivery_threshold").pack())
     builder.adjust(1)
-    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=AdminCallback(action="back_to_main")))
+    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=AdminCallback(action="back_to_main").pack()))
     await query.message.edit_text(text, reply_markup=builder.as_markup())
     
 async def show_categories_for_deletion(query: CallbackQuery):
@@ -324,9 +329,9 @@ async def show_categories_for_deletion(query: CallbackQuery):
         builder.button(text="Нет категорий для удаления", callback_data="no_op")
     else:
         for cat_id, name in categories:
-            builder.button(text=f"❌ {name}", callback_data=AdminCallback(action="confirm_delete_category", category_id=cat_id))
+            builder.button(text=f"❌ {name}", callback_data=AdminCallback(action="confirm_delete_category", category_id=cat_id).pack())
     builder.adjust(1)
-    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=AdminCallback(action="manage_items")))
+    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=AdminCallback(action="manage_items").pack()))
     await query.message.edit_text("Выберите категорию для удаления. ВНИМАНИЕ: это удалит все товары внутри нее.",
                                   reply_markup=builder.as_markup())
 
