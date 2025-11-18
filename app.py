@@ -92,6 +92,7 @@ class OrderState(StatesGroup):
     awaiting_name = State()
     awaiting_phone = State()
     awaiting_address = State()
+    awaiting_takeaway_location = State() # --- ДОБАВЛЕНО ---
     awaiting_comment = State()
     awaiting_final_confirmation = State()
 
@@ -177,9 +178,16 @@ async def show_cart(chat_id: int, message_id: Optional[int] = None, message: Opt
         if message_id and message:
             await message.answer(text, reply_markup=builder.as_markup())
 
+# --- ИЗМЕНЕНО ---
 async def confirm_order(message: Message, state: FSMContext):
     data = await state.get_data()
     chat_id = message.chat.id
+
+    # Проверка на первый заказ для скидки
+    order_count_result = await db_query("SELECT COUNT(*) FROM orders WHERE user_id = ?", (chat_id,), fetchone=True)
+    is_first_order = order_count_result[0] == 0 if order_count_result else True
+    discount = 15 if is_first_order else 0
+
     cart_items = await db_query('''SELECT mi.name, mi.price, c.quantity FROM cart c JOIN menu_items mi 
                                    ON c.item_id = mi.id WHERE c.user_id = ?''', (chat_id,))
     subtotal = sum(price * quantity for _, price, quantity in cart_items)
@@ -193,20 +201,30 @@ async def confirm_order(message: Message, state: FSMContext):
             delivery_cost_text = f"🚛 *Доставка:* {int(delivery_cost)} руб.\n"
         else:
             delivery_cost_text = f"🚛 *Доставка:* Бесплатно (заказ от {int(settings['free_delivery_threshold'])} руб.)\n"
-    final_total = subtotal + delivery_cost
-    await state.update_data(final_total=final_total)
+    
+    final_total = subtotal + delivery_cost - discount
+    await state.update_data(final_total=final_total, discount=discount)
+
     delivery_text = 'Самовывоз' if data['delivery_type'] == 'takeaway' else 'Доставка'
     text = (f"🔍 *Проверьте ваш заказ:*\n\n"
             f"👤 *Имя:* {data['name']}\n"
             f"📞 *Телефон:* {data['phone']}\n"
             f"*Способ получения:* {delivery_text}\n")
+
     if data['delivery_type'] == 'delivery':
-        text += f"📍 *Адрес:* {data.get('address', 'Не указан')}\n"
+        text += f"📍 *Адрес доставки:* {data.get('address', 'Не указан')}\n"
+    else: # Takeaway
+        text += f"📍 *Пункт самовывоза:* {data.get('address', 'Не указан')}\n"
+        
     if 'comment' in data:
         text += f"💬 *Комментарий:* {data['comment']}\n"
     text += "\n*Состав заказа:*\n" + "\n".join([f"▪️ {name} x {q} шт." for name, _, q in cart_items])
     text += f"\n\n📦 *Товары:* {int(subtotal)} руб.\n"
     text += delivery_cost_text
+    
+    if discount > 0:
+        text += f"🎁 *Скидка на первый заказ:* -{int(discount)} руб.\n"
+
     text += f"💰 *Итого к оплате: {int(final_total)} руб.*\n\nВсё верно?"
     await state.set_state(OrderState.awaiting_final_confirmation)
     markup = InlineKeyboardMarkup(inline_keyboard=[
@@ -215,6 +233,7 @@ async def confirm_order(message: Message, state: FSMContext):
     ])
     await message.answer(text, reply_markup=markup)
 
+# --- ИЗМЕНЕНО ---
 async def process_final_confirmation(query: CallbackQuery, state: FSMContext):
     chat_id = query.from_user.id
     data = await state.get_data()
@@ -224,18 +243,32 @@ async def process_final_confirmation(query: CallbackQuery, state: FSMContext):
         await query.message.answer("Ваша корзина пуста.", reply_markup=get_main_menu_keyboard())
         await state.clear()
         return
+        
     final_total = data.get('final_total', 0)
-    delivery_text = 'Самовывоз' if data['delivery_type'] == 'takeaway' else 'Доставка'
-    admin_text = (f"🔔 *Новый заказ*\n\n"
-                  f"*Клиент:* {data['name']}, {data['phone']}\n"
-                  f"*Тип:* {delivery_text}\n")
+    discount = data.get('discount', 0)
+    
+    admin_text = f"🔔 *Новый заказ*\n\n"
+    admin_text += f"*Клиент:* {data['name']}, {data['phone']}\n"
+
     if data['delivery_type'] == 'delivery':
+        admin_text += f"*Тип:* Доставка\n"
         admin_text += f"*Адрес:* {data.get('address', 'Не указан')}\n"
+    else: # Takeaway
+        admin_text += f"*Тип:* Самовывоз\n"
+        admin_text += f"*Адрес самовывоза:* {data.get('address', 'Не указан')}\n"
+        
     if 'comment' in data:
         admin_text += f"*Комментарий:* {data['comment']}\n"
+
     admin_text += "\n*Заказ:*\n" + "\n".join([f"▪️ {n} x {q} = {int(p * q)}р" for _, n, p, q in cart_items])
-    admin_text += f"\n\n*Итого с доставкой: {int(final_total)} руб.*"
+    
+    if discount > 0:
+        admin_text += f"\n\n*Применена скидка на первый заказ:* {int(discount)} руб."
+
+    admin_text += f"\n*Итого с доставкой: {int(final_total)} руб.*"
+
     async with aiosqlite.connect(DB_NAME) as db:
+        # Сохраняем адрес и для доставки, и для самовывоза
         cursor = await db.execute('''INSERT INTO orders (user_id, user_name, phone_number, delivery_type, address, comment, total_amount)
                                      VALUES (?, ?, ?, ?, ?, ?, ?)''', (chat_id, data['name'], data['phone'], data['delivery_type'],
                                      data.get('address', ''), data.get('comment', ''), final_total))
@@ -258,9 +291,7 @@ async def process_final_confirmation(query: CallbackQuery, state: FSMContext):
 # --- 6. UI & LOGIC FUNCTIONS (ADMIN) ---
 async def get_admin_panel(message_or_query):
     builder = InlineKeyboardBuilder()
-    # ✅ CORRECTED - Added .pack()
     builder.button(text="Управление товарами", callback_data=AdminCallback(action="manage_items").pack())
-    # ✅ CORRECTED - Added .pack()
     builder.button(text="⚙️ Настройки", callback_data=AdminCallback(action="settings").pack())
     builder.adjust(1)
     text = "Добро пожаловать в панель администратора."
@@ -275,11 +306,8 @@ async def show_item_management_categories(query: CallbackQuery):
     for cat_id, name in categories:
         builder.button(text=name, callback_data=AdminCallback(action="view_cat_items", category_id=cat_id).pack())
     builder.adjust(2)
-    # ✅ CORRECTED - Added .pack()
     builder.row(InlineKeyboardButton(text="➕ Добавить категорию", callback_data=AdminCallback(action="add_category").pack()))
-    # ✅ CORRECTED - Added .pack()
     builder.row(InlineKeyboardButton(text="➖ Удалить категорию", callback_data=AdminCallback(action="delete_category_menu").pack()))
-    # ✅ CORRECTED - Added .pack()
     builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=AdminCallback(action="back_to_main").pack()))
     await query.message.edit_text("Выберите категорию для управления товарами или воспользуйтесь опциями ниже:",
                                   reply_markup=builder.as_markup())
@@ -341,10 +369,19 @@ async def show_categories_for_deletion(query: CallbackQuery):
                                   reply_markup=builder.as_markup())
 
 # --- 7. MESSAGE HANDLERS (GENERAL) ---
+# --- ИЗМЕНЕНО ---
 @dp.message(CommandStart())
 async def send_welcome(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer("👋 Здравствуйте!", reply_markup=get_main_menu_keyboard())
+    welcome_text = (
+        "Привет! 👋 Добро пожаловать в Street_eda_bot — здесь вы можете заказать шаурму, "
+        "люля-кебаб, картофель фри и комбо-наборы по лучшей цене.\n\n"
+        "🚚 *Доставка по городу от 1000р - бесплатно*\n\n"
+        "🎁 *Подарок новым пользователям:*\n"
+        "Скидка –15 ₽ на первый заказ.\n\n"
+        "Чтобы применить подарок — просто оформите заказ через бота."
+    )
+    await message.answer(welcome_text, reply_markup=get_main_menu_keyboard())
 
 @dp.message(F.text == "🍴 Меню")
 async def show_menu(message: Message, state: FSMContext):
@@ -497,6 +534,7 @@ async def handle_checkout(q: CallbackQuery, state: FSMContext):
     await state.set_state(OrderState.awaiting_name)
     await q.answer()
 
+# --- ИЗМЕНЕНО ---
 @dp.callback_query(F.data.startswith('delivery:'))
 async def handle_delivery_choice(q: CallbackQuery, state: FSMContext):
     delivery_type = q.data.split(':')[1]
@@ -505,9 +543,23 @@ async def handle_delivery_choice(q: CallbackQuery, state: FSMContext):
     if delivery_type == 'delivery':
         await q.message.answer("📍 Пожалуйста, введите ваш адрес:")
         await state.set_state(OrderState.awaiting_address)
-    else: # takeaway
-        await q.message.answer("Есть ли комментарий к заказу? Если нет, напишите 'нет'.")
-        await state.set_state(OrderState.awaiting_comment)
+    else:  # takeaway
+        builder = InlineKeyboardBuilder()
+        builder.button(text="Ул. Колхозная 9", callback_data='takeaway_loc:Ул. Колхозная 9')
+        builder.button(text="Ул. Шоссейный переулок 5А", callback_data='takeaway_loc:Ул. Шоссейный переулок 5А')
+        builder.adjust(1)
+        await q.message.answer("Выберите адрес для самовывоза:", reply_markup=builder.as_markup())
+        await state.set_state(OrderState.awaiting_takeaway_location)
+    await q.answer()
+
+# --- ДОБАВЛЕНО ---
+@dp.callback_query(F.data.startswith('takeaway_loc:'), OrderState.awaiting_takeaway_location)
+async def handle_takeaway_location(q: CallbackQuery, state: FSMContext):
+    address = q.data.split(':')[1]
+    await state.update_data(address=address)
+    await q.message.delete()
+    await q.message.answer("Есть ли комментарий к заказу? Если нет, напишите 'нет'.")
+    await state.set_state(OrderState.awaiting_comment)
     await q.answer()
 
 @dp.callback_query(F.data == 'confirm_order', OrderState.awaiting_final_confirmation)
