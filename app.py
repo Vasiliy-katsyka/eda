@@ -16,7 +16,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.filters.callback_data import CallbackData
 from dotenv import load_dotenv
 
-# --- 1. CONFIGURATION ---
+# --- 1. CONFIGURATIO ---
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
